@@ -104,3 +104,25 @@ def test_optimize_pipes():
     for pipe_name in wn.pipe_name_list:
         assert pipe_name in best_diameters
         assert best_diameters[pipe_name] in available_diameters
+
+def test_optimize_targeted_pipes():
+    available_diameters = [100, 200, 300, 400]
+    target_pipes = ['1', '2']
+    best_diameters, best_cost = optimize_pipes(
+        inp_file=DUMMY_INP_PATH,
+        available_diameters=available_diameters,
+        target_pipes=target_pipes,
+        min_pressure=20,
+        pop_size=10,
+        ngen=5
+    )
+
+    # Check return types
+    assert isinstance(best_diameters, dict)
+    assert isinstance(best_cost, float)
+
+    # Check that it returns diameters only for the targeted pipes
+    assert len(best_diameters) == 2
+    for pipe_name in target_pipes:
+        assert pipe_name in best_diameters
+        assert best_diameters[pipe_name] in available_diameters

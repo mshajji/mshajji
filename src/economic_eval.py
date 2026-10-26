@@ -6,18 +6,21 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def evaluate_network(individual, inp_file, available_diameters, diameter_costs, min_pressure):
+def evaluate_network(individual, inp_file, target_pipes, available_diameters, diameter_costs, min_pressure):
     wn = wntr.network.WaterNetworkModel(inp_file)
-    pipe_names = wn.pipe_name_list
     cost = 0
 
-    # Set pipe diameters
-    for i, pipe_name in enumerate(pipe_names):
+    # Set pipe diameters for targeted pipes
+    for i, pipe_name in enumerate(target_pipes):
         pipe = wn.get_link(pipe_name)
         diameter = available_diameters[individual[i]]
         # Convert to meters if EPANET expects it, or keep consistent with inp
         pipe.diameter = diameter
         cost += diameter_costs[diameter] * pipe.length
+
+    # We may also want to add the cost of the existing pipes that aren't being optimized
+    # if we want the total network cost, but usually optimization focuses on the variable cost.
+    # For now, we'll just consider the cost of the targeted pipes for the optimization objective.
 
     sim = wntr.sim.EpanetSimulator(wn)
     try:
@@ -43,7 +46,7 @@ def evaluate_network(individual, inp_file, available_diameters, diameter_costs, 
 
     return cost,
 
-def optimize_pipes(inp_file, available_diameters, diameter_costs=None, min_pressure=20,
+def optimize_pipes(inp_file, available_diameters, target_pipes=None, diameter_costs=None, min_pressure=20,
                    pop_size=50, ngen=50, cxpb=0.5, mutpb=0.2):
     """
     Optimizes pipe diameters in an EPANET network to minimize cost while satisfying a minimum pressure constraint.
@@ -51,16 +54,18 @@ def optimize_pipes(inp_file, available_diameters, diameter_costs=None, min_press
 
     :param inp_file: Path to the EPANET .inp file.
     :param available_diameters: List of available discrete pipe diameters.
+    :param target_pipes: List of pipe names/IDs to optimize. If None, all pipes are optimized.
     :param diameter_costs: Dictionary mapping diameter to cost per unit length. If None, cost is assumed to be proportional to D^2.
     :param min_pressure: Minimum allowable pressure at all junctions.
     :param pop_size: Population size for the genetic algorithm.
     :param ngen: Number of generations.
     :param cxpb: Crossover probability.
     :param mutpb: Mutation probability.
-    :return: A dictionary mapping pipe names to their optimal diameter, and the best cost found.
+    :return: A dictionary mapping targeted pipe names to their optimal diameter, and the best cost found.
     """
     wn = wntr.network.WaterNetworkModel(inp_file)
-    pipe_names = wn.pipe_name_list
+    if target_pipes is None:
+        target_pipes = wn.pipe_name_list
 
     if diameter_costs is None:
         diameter_costs = {d: d**2 for d in available_diameters}
@@ -73,10 +78,11 @@ def optimize_pipes(inp_file, available_diameters, diameter_costs=None, min_press
     toolbox = base.Toolbox()
     # Gene is an index of the available_diameters list
     toolbox.register("attr_diameter_idx", random.randint, 0, len(available_diameters)-1)
-    toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_diameter_idx, n=len(pipe_names))
+    toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_diameter_idx, n=len(target_pipes))
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
     toolbox.register("evaluate", evaluate_network, inp_file=inp_file,
+                     target_pipes=target_pipes,
                      available_diameters=available_diameters,
                      diameter_costs=diameter_costs,
                      min_pressure=min_pressure)
@@ -94,7 +100,7 @@ def optimize_pipes(inp_file, available_diameters, diameter_costs=None, min_press
                                    stats=stats, halloffame=hof, verbose=True)
 
     best_ind = hof[0]
-    best_diameters = {pipe_names[i]: available_diameters[best_ind[i]] for i in range(len(pipe_names))}
+    best_diameters = {target_pipes[i]: available_diameters[best_ind[i]] for i in range(len(target_pipes))}
     best_cost = best_ind.fitness.values[0]
 
     return best_diameters, best_cost
