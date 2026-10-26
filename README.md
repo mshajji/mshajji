@@ -11,7 +11,21 @@ pip install -r requirements.txt
 
 ## Usage
 
-You can use the `optimize_pipes` function from `src.economic_eval`:
+### Command Line Interface
+
+You can run the optimizer directly from the terminal.
+
+```bash
+# Optimize all pipes
+python src/economic_eval.py network.inp --available_diameters 100 200 300 400 --min_pressure 20
+
+# Target specific pipes for optimization
+python src/economic_eval.py network.inp --available_diameters 100 200 300 400 --target_pipes pipe1 pipe2 --min_pressure 20
+```
+
+### Python API
+
+You can also use the `optimize_pipes` function from `src.economic_eval` in your own code:
 
 ```python
 from src.economic_eval import optimize_pipes

@@ -6,13 +6,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def evaluate_network(individual, inp_file, target_pipes, available_diameters, diameter_costs, min_pressure):
-    wn = wntr.network.WaterNetworkModel(inp_file)
+def evaluate_network(individual, wn, target_pipes, available_diameters, diameter_costs, min_pressure):
+    # It's important to reset the simulation state or use a copy if the simulator mutates it irreparably.
+    # WNTR simulator usually requires a fresh model to avoid issues with repeated runs,
+    # but we can copy the model object in memory to avoid parsing the inp file repeatedly.
+    import copy
+    wn_eval = copy.deepcopy(wn)
     cost = 0
 
     # Set pipe diameters for targeted pipes
     for i, pipe_name in enumerate(target_pipes):
-        pipe = wn.get_link(pipe_name)
+        pipe = wn_eval.get_link(pipe_name)
         diameter = available_diameters[individual[i]]
         # Convert to meters if EPANET expects it, or keep consistent with inp
         pipe.diameter = diameter
@@ -22,12 +26,12 @@ def evaluate_network(individual, inp_file, target_pipes, available_diameters, di
     # if we want the total network cost, but usually optimization focuses on the variable cost.
     # For now, we'll just consider the cost of the targeted pipes for the optimization objective.
 
-    sim = wntr.sim.EpanetSimulator(wn)
+    sim = wntr.sim.EpanetSimulator(wn_eval)
     try:
         results = sim.run_sim()
         # Evaluate pressures at all time steps
         pressures = results.node['pressure']
-        junction_names = wn.junction_name_list
+        junction_names = wn_eval.junction_name_list
 
         if pressures.empty:
              return 1e9,
@@ -81,12 +85,18 @@ def optimize_pipes(inp_file, available_diameters, target_pipes=None, diameter_co
     toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_diameter_idx, n=len(target_pipes))
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
-    toolbox.register("evaluate", evaluate_network, inp_file=inp_file,
+    toolbox.register("evaluate", evaluate_network, wn=wn,
                      target_pipes=target_pipes,
                      available_diameters=available_diameters,
                      diameter_costs=diameter_costs,
                      min_pressure=min_pressure)
-    toolbox.register("mate", tools.cxTwoPoint)
+
+    # Use uniform crossover if length is < 2 (cxTwoPoint fails on length 1)
+    if len(target_pipes) < 2:
+        toolbox.register("mate", tools.cxUniform, indpb=0.5)
+    else:
+        toolbox.register("mate", tools.cxTwoPoint)
+
     toolbox.register("mutate", tools.mutUniformInt, low=0, up=len(available_diameters)-1, indpb=0.1)
     toolbox.register("select", tools.selTournament, tournsize=3)
 
@@ -104,3 +114,42 @@ def optimize_pipes(inp_file, available_diameters, target_pipes=None, diameter_co
     best_cost = best_ind.fitness.values[0]
 
     return best_diameters, best_cost
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="Optimize pipe diameters in an EPANET network.")
+    parser.add_argument("inp_file", type=str, help="Path to the EPANET .inp file.")
+    parser.add_argument("--available_diameters", type=float, nargs='+', required=True,
+                        help="List of available discrete pipe diameters (space-separated).")
+    parser.add_argument("--target_pipes", type=str, nargs='*', default=None,
+                        help="List of pipe IDs to optimize (space-separated). If omitted, all pipes are optimized.")
+    parser.add_argument("--min_pressure", type=float, default=20.0,
+                        help="Minimum allowable pressure at all junctions.")
+    parser.add_argument("--pop_size", type=int, default=50,
+                        help="Population size for the genetic algorithm.")
+    parser.add_argument("--ngen", type=int, default=50,
+                        help="Number of generations for the genetic algorithm.")
+
+    args = parser.parse_args()
+
+    print(f"Optimizing network from {args.inp_file}...")
+
+    try:
+        best_diams, cost = optimize_pipes(
+            inp_file=args.inp_file,
+            available_diameters=args.available_diameters,
+            target_pipes=args.target_pipes,
+            min_pressure=args.min_pressure,
+            pop_size=args.pop_size,
+            ngen=args.ngen
+        )
+        print("\n--- Optimization Results ---")
+        print(f"Best Cost: {cost}")
+        print("Best Diameters:")
+        for p, d in best_diams.items():
+            print(f"  Pipe {p}: {d}")
+    except Exception as e:
+        print(f"Error during optimization: {e}")
+        sys.exit(1)
